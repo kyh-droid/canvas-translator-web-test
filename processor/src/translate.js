@@ -1,295 +1,270 @@
 /**
- * Canvas Translation - Claude API Integration
+ * Canvas Translation using Claude API
  *
- * Translates canvas batches using Claude API with context-aware prompts
+ * Extracts translatable content, translates via Claude, and merges back.
  */
 
 import Anthropic from '@anthropic-ai/sdk';
+import fs from 'fs';
 
-const anthropic = new Anthropic();
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 
-const LANGUAGE_NAMES = {
-  ko: 'Korean',
-  ja: 'Japanese',
-  en: 'English',
+// Language configurations
+const LANG_CONFIG = {
+  en: { name: 'English', instruction: 'Write in English' },
+  ko: { name: 'Korean', instruction: '한국어로 작성' },
+  ja: { name: 'Japanese', instruction: '日本語で書く' },
 };
 
 /**
- * Generate translation prompt for a batch
+ * Main translation function
  */
-function buildTranslationPrompt(batch, batchType, targetLang, context, glossary) {
-  const sourceLang = context._meta.sourceLang;
-  const sourceLangName = LANGUAGE_NAMES[sourceLang] || sourceLang;
-  const targetLangName = LANGUAGE_NAMES[targetLang] || targetLang;
+export async function translateCanvas(inputPath, outputPath, targetLang) {
+  if (!ANTHROPIC_API_KEY) {
+    throw new Error('ANTHROPIC_API_KEY is required');
+  }
 
-  let prompt = `You are a professional translator for StoryChat interactive fiction.
-Translate the following ${batchType} content from ${sourceLangName} to ${targetLangName}.
+  const client = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
 
-## Translation Guidelines:
-1. Maintain the EXACT JSON structure - only translate text values
-2. Preserve all keys, UIDs, and technical fields exactly as-is
-3. Keep {{var_*}} variable references unchanged (do NOT translate variable names inside {{}})
-4. Preserve HTML tags in htmlContent - only translate the text content
-5. Match the tone, style, and register of the original text
-6. For character names: Use the glossary translations if provided, otherwise keep original or romanize appropriately
-7. For lorebook entries: Translate both 'key' and 'text' fields, keeping 'patterns' as-is
+  // Load canvas
+  const canvas = JSON.parse(fs.readFileSync(inputPath, 'utf-8'));
+  const sourceLang = canvas.canvas?.canvasLanguage || 'ko';
 
-## Story Context:
-${context._translationContext.storySummary || 'No summary available'}
+  console.log(`  Translating from ${sourceLang} to ${targetLang}`);
 
-## Characters:
-${Object.entries(context._translationContext.characters || {})
-  .map(([name, info]) => `- ${name}: ${info.description || 'No description'}`)
-  .join('\n') || 'No characters defined'}
+  // Extract translatable content
+  const extractedContent = extractContent(canvas);
+  console.log(`  Extracted ${extractedContent.length} translatable items`);
 
-## Glossary (use these translations for consistency):
-### Characters:
-${Object.entries(glossary.characters || {})
-  .filter(([_, v]) => v[targetLang])
-  .map(([name, v]) => `- ${name} → ${v[targetLang]}`)
-  .join('\n') || 'No character translations'}
+  // Translate in batches
+  const batchSize = 20;
+  const translatedContent = [];
 
-### Variables:
-${Object.entries(glossary.variables || {})
-  .filter(([_, v]) => v[targetLang])
-  .map(([name, v]) => `- ${name} → ${v[targetLang]}`)
-  .join('\n') || 'No variable translations'}
+  for (let i = 0; i < extractedContent.length; i += batchSize) {
+    const batch = extractedContent.slice(i, i + batchSize);
+    console.log(`  Translating batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(extractedContent.length / batchSize)}...`);
 
-### Terms:
-${Object.entries(glossary.terms || {})
-  .filter(([_, v]) => v[targetLang])
-  .map(([term, v]) => `- ${term} → ${v[targetLang]}`)
-  .join('\n') || 'No term translations'}
+    const translated = await translateBatch(client, batch, sourceLang, targetLang);
+    translatedContent.push(...translated);
+  }
 
-## Input (${batchType}):
-${JSON.stringify(batch, null, 2)}
+  // Merge translations back
+  const translatedCanvas = mergeTranslations(canvas, translatedContent, targetLang);
 
-## Output:
-Return ONLY the translated JSON array. No explanation, no markdown code blocks, just the JSON.`;
+  // Update canvas language
+  translatedCanvas.canvas.canvasLanguage = targetLang;
 
-  return prompt;
+  // Save output
+  fs.writeFileSync(outputPath, JSON.stringify(translatedCanvas, null, 2));
+
+  return translatedCanvas;
 }
 
 /**
- * Translate a single batch using Claude API
- * @param {Array} batch - Array of nodes to translate
- * @param {string} batchType - Type of batch (storyCore, characters, etc.)
- * @param {string} targetLang - Target language code (en, ko, ja)
- * @param {Object} context - Translation context from extract
- * @param {Object} glossary - Glossary for consistent translations
- * @returns {Promise<Array>} - Translated batch
+ * Extract translatable content from canvas
  */
-export async function translateBatch(batch, batchType, targetLang, context, glossary) {
-  if (!batch || batch.length === 0) {
-    return [];
+function extractContent(canvas) {
+  const items = [];
+
+  for (const [uid, meta] of Object.entries(canvas.metadataSet)) {
+    const item = { uid, type: meta.type, fields: {} };
+    let hasContent = false;
+
+    switch (meta.type) {
+      case 'character':
+        if (meta.name) { item.fields.name = meta.name; hasContent = true; }
+        if (meta.text) { item.fields.text = meta.text; hasContent = true; }
+        break;
+
+      case 'story':
+        if (meta.coreContext) { item.fields.coreContext = meta.coreContext; hasContent = true; }
+        if (meta.prologue) { item.fields.prologue = meta.prologue; hasContent = true; }
+        if (meta.prologueGuide) { item.fields.prologueGuide = meta.prologueGuide; hasContent = true; }
+        if (meta.text) { item.fields.text = meta.text; hasContent = true; }
+        break;
+
+      case 'text':
+      case 'updateRule':
+        if (meta.text) { item.fields.text = meta.text; hasContent = true; }
+        break;
+
+      case 'variable':
+        if (meta.variableName) { item.fields.variableName = meta.variableName; hasContent = true; }
+        // Only translate string initialValue if not English
+        if (typeof meta.initialValue === 'string' && meta.initialValue.trim() && !isEnglish(meta.initialValue)) {
+          item.fields.initialValue = meta.initialValue;
+          hasContent = true;
+        }
+        break;
+
+      case 'user':
+        if (meta.text) { item.fields.text = meta.text; hasContent = true; }
+        break;
+
+      case 'lorebook':
+        if (meta.entries && meta.entries.length > 0) {
+          item.fields.entries = meta.entries;
+          hasContent = true;
+        }
+        break;
+
+      case 'achievement':
+        if (meta.achievementName) { item.fields.achievementName = meta.achievementName; hasContent = true; }
+        if (meta.description) { item.fields.description = meta.description; hasContent = true; }
+        break;
+
+      case 'statusView':
+        if (meta.statusTitle) { item.fields.statusTitle = meta.statusTitle; hasContent = true; }
+        if (meta.htmlContent) { item.fields.htmlContent = meta.htmlContent; hasContent = true; }
+        break;
+
+      case 'image':
+        if (meta.images) {
+          const explains = meta.images.filter(img => img.explain).map(img => img.explain);
+          if (explains.length > 0) {
+            item.fields.imageExplains = explains;
+            hasContent = true;
+          }
+        }
+        break;
+    }
+
+    if (hasContent) {
+      items.push(item);
+    }
   }
 
-  const prompt = buildTranslationPrompt(batch, batchType, targetLang, context, glossary);
+  return items;
+}
+
+/**
+ * Translate a batch of items using Claude
+ */
+async function translateBatch(client, items, sourceLang, targetLang) {
+  const sourceName = LANG_CONFIG[sourceLang]?.name || sourceLang;
+  const targetName = LANG_CONFIG[targetLang]?.name || targetLang;
+
+  const prompt = `You are a professional translator specializing in interactive fiction and visual novels.
+
+Translate the following content from ${sourceName} to ${targetName}.
+
+IMPORTANT RULES:
+1. Preserve all formatting, HTML tags, and special characters
+2. Keep {{variable}} placeholders unchanged
+3. Maintain the tone and style appropriate for interactive fiction
+4. For character names, translate them naturally (e.g., Korean names to English phonetic equivalents)
+5. For system prompts and instructions, translate the meaning while adapting to the target language
+6. If text contains language instructions like "한국어로 작성", change them to "${LANG_CONFIG[targetLang]?.instruction || 'Write in ' + targetName}"
+
+INPUT (JSON array):
+${JSON.stringify(items, null, 2)}
+
+OUTPUT (same JSON structure with translated content):`;
+
+  const response = await client.messages.create({
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: 16000,
+    messages: [{ role: 'user', content: prompt }],
+  });
+
+  // Parse response
+  const responseText = response.content[0].text;
+
+  // Extract JSON from response
+  const jsonMatch = responseText.match(/\[[\s\S]*\]/);
+  if (!jsonMatch) {
+    console.error('  Warning: Could not parse translation response, using original');
+    return items;
+  }
 
   try {
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 16000,
-      messages: [
-        {
-          role: 'user',
-          content: prompt,
-        },
-      ],
-    });
-
-    const content = response.content[0];
-    if (content.type !== 'text') {
-      throw new Error('Unexpected response type from Claude API');
-    }
-
-    // Parse the response - handle potential markdown code blocks
-    let jsonText = content.text.trim();
-
-    // Remove markdown code block if present
-    if (jsonText.startsWith('```')) {
-      jsonText = jsonText.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
-    }
-
-    const translated = JSON.parse(jsonText);
-
-    // Validate that we got an array back
-    if (!Array.isArray(translated)) {
-      throw new Error('Expected array response from translation');
-    }
-
-    // Validate that UIDs match
-    if (translated.length !== batch.length) {
-      console.warn(`Warning: Translated batch length (${translated.length}) differs from original (${batch.length})`);
-    }
-
-    return translated;
-  } catch (error) {
-    console.error(`Error translating ${batchType} batch:`, error.message);
-    throw error;
+    return JSON.parse(jsonMatch[0]);
+  } catch (e) {
+    console.error('  Warning: Invalid JSON in response, using original');
+    return items;
   }
 }
 
 /**
- * Translate glossary (characters, variables, terms) using Claude API
- * @param {Object} glossary - Raw glossary from extract
- * @param {string} targetLang - Target language code
- * @param {Object} context - Translation context
- * @returns {Promise<Object>} - Glossary with translations filled in
+ * Merge translated content back into canvas
  */
-export async function translateGlossary(glossary, targetLang, context) {
-  const sourceLang = glossary._meta.sourceLang;
-  const sourceLangName = LANGUAGE_NAMES[sourceLang] || sourceLang;
-  const targetLangName = LANGUAGE_NAMES[targetLang] || targetLang;
-
-  // Build list of terms to translate
-  const termsToTranslate = {
-    characters: Object.entries(glossary.characters).map(([name, v]) => ({
-      original: name,
-      note: v.note,
-    })),
-    variables: Object.entries(glossary.variables).map(([name, v]) => ({
-      original: name,
-      note: v.note,
-    })),
-    terms: Object.entries(glossary.terms).map(([term, v]) => ({
-      original: term,
-      note: v.note,
-    })),
-  };
-
-  const prompt = `You are a professional translator for StoryChat interactive fiction.
-Translate the following glossary terms from ${sourceLangName} to ${targetLangName}.
-
-## Story Context:
-${context._translationContext.storySummary || 'No summary available'}
-
-## Guidelines:
-1. For character names: Provide appropriate translations or romanizations
-2. For variable names: Translate to meaningful ${targetLangName} equivalents
-3. For story terms: Translate to natural ${targetLangName} expressions
-4. Use the 'note' field for context about each term
-
-## Terms to Translate:
-${JSON.stringify(termsToTranslate, null, 2)}
-
-## Output Format:
-Return a JSON object with the same structure, but with translated values:
-{
-  "characters": { "original_name": "translated_name", ... },
-  "variables": { "original_name": "translated_name", ... },
-  "terms": { "original_term": "translated_term", ... }
-}
-
-Return ONLY the JSON object. No explanation, no markdown code blocks.`;
-
-  try {
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 4000,
-      messages: [
-        {
-          role: 'user',
-          content: prompt,
-        },
-      ],
-    });
-
-    const content = response.content[0];
-    if (content.type !== 'text') {
-      throw new Error('Unexpected response type from Claude API');
-    }
-
-    let jsonText = content.text.trim();
-    if (jsonText.startsWith('```')) {
-      jsonText = jsonText.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
-    }
-
-    const translations = JSON.parse(jsonText);
-
-    // Apply translations to glossary
-    for (const [name, translated] of Object.entries(translations.characters || {})) {
-      if (glossary.characters[name]) {
-        glossary.characters[name][targetLang] = translated;
-      }
-    }
-    for (const [name, translated] of Object.entries(translations.variables || {})) {
-      if (glossary.variables[name]) {
-        glossary.variables[name][targetLang] = translated;
-      }
-    }
-    for (const [term, translated] of Object.entries(translations.terms || {})) {
-      if (glossary.terms[term]) {
-        glossary.terms[term][targetLang] = translated;
-      }
-    }
-
-    return glossary;
-  } catch (error) {
-    console.error('Error translating glossary:', error.message);
-    throw error;
+function mergeTranslations(canvas, translatedContent, targetLang) {
+  // Build lookup map
+  const translationMap = {};
+  for (const item of translatedContent) {
+    translationMap[item.uid] = item;
   }
+
+  // Apply translations
+  for (const [uid, meta] of Object.entries(canvas.metadataSet)) {
+    const translated = translationMap[uid];
+    if (!translated) continue;
+
+    const fields = translated.fields;
+
+    if (fields.name) meta.name = fields.name;
+    if (fields.text) meta.text = transformLanguageInstruction(fields.text, targetLang);
+    if (fields.coreContext) meta.coreContext = fields.coreContext;
+    if (fields.prologue) meta.prologue = fields.prologue;
+    if (fields.prologueGuide) meta.prologueGuide = fields.prologueGuide;
+    if (fields.variableName) meta.variableName = fields.variableName;
+    if (fields.initialValue) meta.initialValue = fields.initialValue;
+    if (fields.achievementName) meta.achievementName = fields.achievementName;
+    if (fields.description) meta.description = fields.description;
+    if (fields.statusTitle) meta.statusTitle = fields.statusTitle;
+    if (fields.htmlContent) meta.htmlContent = fields.htmlContent;
+
+    if (fields.entries && meta.entries) {
+      meta.entries = fields.entries;
+    }
+
+    if (fields.imageExplains && meta.images) {
+      for (let i = 0; i < fields.imageExplains.length && i < meta.images.length; i++) {
+        if (fields.imageExplains[i]) {
+          meta.images[i].explain = fields.imageExplains[i];
+        }
+      }
+    }
+  }
+
+  // Translate tagCategorization
+  if (canvas.canvas.tagCategorization) {
+    // This would need another Claude call for proper translation
+    // For now, keep as-is
+  }
+
+  return canvas;
 }
 
 /**
- * Translate all batches for a canvas
- * @param {Object} extractedData - Output from extractCanvas
- * @param {string} targetLang - Target language code
- * @param {Function} onProgress - Progress callback (batchType, current, total)
- * @returns {Promise<Object>} - { translatedBatches, glossary }
+ * Check if text is primarily English
  */
-export async function translateAllBatches(extractedData, targetLang, onProgress = () => {}) {
-  const { context, glossary, batches } = extractedData;
-
-  // First, translate the glossary for consistency
-  console.log('Translating glossary...');
-  onProgress('glossary', 0, 1);
-  const translatedGlossary = await translateGlossary(glossary, targetLang, context);
-  onProgress('glossary', 1, 1);
-
-  // Then translate each batch in order
-  const batchOrder = ['storyCore', 'variables', 'characters', 'characterText', 'content', 'system'];
-  const translatedBatches = {};
-
-  for (const batchType of batchOrder) {
-    const batch = batches[batchType];
-    if (!batch || batch.length === 0) {
-      translatedBatches[batchType] = [];
-      continue;
-    }
-
-    console.log(`Translating ${batchType} (${batch.length} nodes)...`);
-    onProgress(batchType, 0, batch.length);
-
-    // For large batches, split into chunks
-    const CHUNK_SIZE = 10;
-    const chunks = [];
-    for (let i = 0; i < batch.length; i += CHUNK_SIZE) {
-      chunks.push(batch.slice(i, i + CHUNK_SIZE));
-    }
-
-    const translatedChunks = [];
-    for (let i = 0; i < chunks.length; i++) {
-      const translated = await translateBatch(
-        chunks[i],
-        batchType,
-        targetLang,
-        context,
-        translatedGlossary
-      );
-      translatedChunks.push(...translated);
-      onProgress(batchType, Math.min((i + 1) * CHUNK_SIZE, batch.length), batch.length);
-
-      // Add small delay between chunks to avoid rate limiting
-      if (i < chunks.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 500));
-      }
-    }
-
-    translatedBatches[batchType] = translatedChunks;
-  }
-
-  return { translatedBatches, glossary: translatedGlossary };
+function isEnglish(text) {
+  if (!text) return false;
+  const englishChars = text.match(/[a-zA-Z]/g) || [];
+  const totalChars = text.replace(/[\s\d\p{P}]/gu, '').length;
+  return totalChars > 0 && (englishChars.length / totalChars) > 0.7;
 }
 
-export default { translateBatch, translateGlossary, translateAllBatches };
+/**
+ * Transform language instructions in text to target language
+ */
+function transformLanguageInstruction(text, targetLang) {
+  if (!text) return text;
+
+  const patterns = [
+    { regex: /한국어로\s*(작성|출력|생성|응답)/gi, lang: 'ko' },
+    { regex: /한글로\s*(작성|출력|생성|응답)/gi, lang: 'ko' },
+    { regex: /日本語で\s*(書く|出力|生成|応答)/gi, lang: 'ja' },
+    { regex: /(?:write|output|respond|generate)\s+(?:in|using)\s+(?:korean|japanese|english)/gi, lang: 'en' },
+  ];
+
+  let result = text;
+  const targetInstruction = LANG_CONFIG[targetLang]?.instruction;
+
+  for (const { regex } of patterns) {
+    result = result.replace(regex, targetInstruction);
+  }
+
+  return result;
+}

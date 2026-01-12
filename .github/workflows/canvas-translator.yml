@@ -1,20 +1,28 @@
-name: Canvas Translation Processor
+name: Canvas Translation
 
 on:
-  # Triggered by Cloudflare Worker webhook
+  # Triggered by Google Apps Script
   repository_dispatch:
     types: [canvas-translation]
 
-  # Backup: run every 15 minutes to process any pending requests
-  schedule:
-    - cron: '*/15 * * * *'
-
   # Manual trigger for testing
   workflow_dispatch:
+    inputs:
+      fileId:
+        description: 'Google Drive File ID'
+        required: true
+      targetLang:
+        description: 'Target language (en/ko/ja)'
+        required: true
+        default: 'en'
+      email:
+        description: 'Email to send result'
+        required: true
 
 jobs:
-  process-translations:
+  translate:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
@@ -31,29 +39,38 @@ jobs:
         working-directory: processor
         run: npm ci
 
-      - name: Process translation queue
+      - name: Set variables from dispatch
+        id: vars
+        run: |
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            echo "requestId=${{ github.event.client_payload.requestId }}" >> $GITHUB_OUTPUT
+            echo "fileId=${{ github.event.client_payload.fileId }}" >> $GITHUB_OUTPUT
+            echo "targetLang=${{ github.event.client_payload.targetLang }}" >> $GITHUB_OUTPUT
+            echo "email=${{ github.event.client_payload.email }}" >> $GITHUB_OUTPUT
+          else
+            echo "requestId=TR-MANUAL-$(date +%s)" >> $GITHUB_OUTPUT
+            echo "fileId=${{ inputs.fileId }}" >> $GITHUB_OUTPUT
+            echo "targetLang=${{ inputs.targetLang }}" >> $GITHUB_OUTPUT
+            echo "email=${{ inputs.email }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run translation
         working-directory: processor
         env:
-          # Google Sheets API
-          GOOGLE_SERVICE_ACCOUNT_EMAIL: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_EMAIL }}
-          GOOGLE_PRIVATE_KEY: ${{ secrets.GOOGLE_PRIVATE_KEY }}
-          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-
-          # Claude API
+          REQUEST_ID: ${{ steps.vars.outputs.requestId }}
+          FILE_ID: ${{ steps.vars.outputs.fileId }}
+          TARGET_LANG: ${{ steps.vars.outputs.targetLang }}
+          USER_EMAIL: ${{ steps.vars.outputs.email }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-
-          # MongoDB (for direct import)
-          MONGO_URI_3: ${{ secrets.MONGO_URI_3 }}
-
-          # Mailgun (for email delivery)
           MAILGUN_API_KEY: ${{ secrets.MAILGUN_API_KEY }}
           MAILGUN_DOMAIN: ${{ secrets.MAILGUN_DOMAIN }}
         run: node src/main.js
 
-      - name: Upload logs
-        if: always()
+      - name: Upload logs on failure
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: translation-logs-${{ github.run_id }}
+          name: error-logs-${{ steps.vars.outputs.requestId }}
           path: processor/logs/
           retention-days: 7

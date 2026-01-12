@@ -1,43 +1,20 @@
 # Dependencies
 node_modules/
 
-# Environment files
+# Work directory
+processor/work/
+
+# Environment
 .env
 .env.local
-.env.*.local
-
-# Build outputs
-dist/
-build/
 
 # Logs
-logs/
 *.log
-npm-debug.log*
 
-# OS files
+# OS
 .DS_Store
 Thumbs.db
 
 # IDE
 .idea/
 .vscode/
-*.swp
-*.swo
-
-# Cloudflare Workers
-.wrangler/
-
-# Temporary files
-tmp/
-temp/
-*.tmp
-
-# Test outputs
-coverage/
-.nyc_output/
-
-# Canvas translation temp files
-processor/input/
-processor/output/
-processor/batches/
