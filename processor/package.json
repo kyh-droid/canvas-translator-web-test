@@ -1,0 +1,23 @@
+{
+  "name": "canvas-translator-processor",
+  "version": "1.0.0",
+  "description": "StoryChat canvas translation processor using Claude API",
+  "main": "src/main.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/main.js",
+    "process": "node src/main.js --once",
+    "test": "node src/test.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.27.0",
+    "dotenv": "^16.4.0",
+    "googleapis": "^140.0.0",
+    "mongodb": "^6.8.0",
+    "formdata-node": "^6.0.3",
+    "js-tiktoken": "^1.0.8"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

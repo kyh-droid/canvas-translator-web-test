@@ -1,0 +1,59 @@
+name: Canvas Translation Processor
+
+on:
+  # Triggered by Cloudflare Worker webhook
+  repository_dispatch:
+    types: [canvas-translation]
+
+  # Backup: run every 15 minutes to process any pending requests
+  schedule:
+    - cron: '*/15 * * * *'
+
+  # Manual trigger for testing
+  workflow_dispatch:
+
+jobs:
+  process-translations:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: processor/package-lock.json
+
+      - name: Install dependencies
+        working-directory: processor
+        run: npm ci
+
+      - name: Process translation queue
+        working-directory: processor
+        env:
+          # Google Sheets API
+          GOOGLE_SERVICE_ACCOUNT_EMAIL: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_EMAIL }}
+          GOOGLE_PRIVATE_KEY: ${{ secrets.GOOGLE_PRIVATE_KEY }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+
+          # Claude API
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+          # MongoDB (for direct import)
+          MONGO_URI_3: ${{ secrets.MONGO_URI_3 }}
+
+          # Mailgun (for email delivery)
+          MAILGUN_API_KEY: ${{ secrets.MAILGUN_API_KEY }}
+          MAILGUN_DOMAIN: ${{ secrets.MAILGUN_DOMAIN }}
+        run: node src/main.js
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: translation-logs-${{ github.run_id }}
+          path: processor/logs/
+          retention-days: 7

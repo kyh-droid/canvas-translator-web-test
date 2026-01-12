@@ -1,0 +1,17 @@
+name = "canvas-translator-api"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+# Environment variables - set via wrangler secret
+# wrangler secret put GOOGLE_SERVICE_ACCOUNT_EMAIL
+# wrangler secret put GOOGLE_PRIVATE_KEY
+# wrangler secret put SPREADSHEET_ID
+# wrangler secret put GITHUB_TOKEN (optional, for webhook)
+
+[vars]
+CORS_ORIGIN = "*"
+
+# Routes (optional - for custom domain)
+# routes = [
+#   { pattern = "translate-api.rplay.live/*", zone_name = "rplay.live" }
+# ]
