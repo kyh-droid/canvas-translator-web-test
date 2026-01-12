@@ -27,7 +27,7 @@ const CONFIG = {
   FORM_FIELDS: {
     FILE: 'Canvas JSON File',      // File upload field title
     TARGET_LANG: 'Target Language', // Dropdown field title
-    EMAIL: 'Email',                // Email field title
+    USER_UID: 'User UID',          // User's MongoDB ObjectId (24-char hex)
   },
 
   // Language mapping (Form answer -> code)
@@ -46,6 +46,9 @@ const CONFIG = {
 
 /**
  * Run this function once to set up the form submit trigger
+ *
+ * IMPORTANT: Run this from the spreadsheet's Apps Script editor
+ * (Open Sheet > Extensions > Apps Script)
  */
 function setupTrigger() {
   // Remove existing triggers
@@ -56,8 +59,22 @@ function setupTrigger() {
     }
   });
 
-  // Create new trigger
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  // Try to get the spreadsheet
+  let ss;
+  try {
+    ss = SpreadsheetApp.getActiveSpreadsheet();
+  } catch (e) {
+    // If no active spreadsheet, try to get by ID
+    // Replace with your actual Spreadsheet ID from the URL
+    const SPREADSHEET_ID = 'YOUR_SPREADSHEET_ID_HERE';
+    ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  }
+
+  if (!ss) {
+    Logger.log('ERROR: Could not find spreadsheet. Make sure to run this from the Sheet\'s Apps Script editor.');
+    return;
+  }
+
   ScriptApp.newTrigger('onFormSubmit')
     .forSpreadsheet(ss)
     .onFormSubmit()
@@ -65,6 +82,17 @@ function setupTrigger() {
 
   Logger.log('Trigger created successfully!');
 }
+
+/**
+ * Alternative: Set up trigger manually via UI
+ *
+ * 1. In Apps Script, click the clock icon (Triggers) on the left
+ * 2. Click "+ Add Trigger"
+ * 3. Choose function: onFormSubmit
+ * 4. Event source: From spreadsheet
+ * 5. Event type: On form submit
+ * 6. Click Save
+ */
 
 // ============================================================================
 // FORM SUBMIT HANDLER
@@ -81,13 +109,19 @@ function onFormSubmit(e) {
     // Extract form data
     const fileUrls = responses[CONFIG.FORM_FIELDS.FILE];
     const targetLangRaw = responses[CONFIG.FORM_FIELDS.TARGET_LANG]?.[0] || '';
-    const email = responses[CONFIG.FORM_FIELDS.EMAIL]?.[0] || '';
+    const userUid = responses[CONFIG.FORM_FIELDS.USER_UID]?.[0] || '';
 
     // Get the file URL (Google Drive URL from form upload)
     const fileUrl = fileUrls?.[0] || '';
 
     if (!fileUrl) {
       Logger.log('Error: No file uploaded');
+      return;
+    }
+
+    // Validate User UID (must be 24-character hex)
+    if (!userUid || !/^[a-f0-9]{24}$/i.test(userUid)) {
+      Logger.log('Error: Invalid User UID format: ' + userUid);
       return;
     }
 
@@ -112,17 +146,13 @@ function onFormSubmit(e) {
       requestId: requestId,
       fileId: fileId,
       targetLang: targetLang,
-      email: email,
+      userUid: userUid,
       timestamp: new Date().toISOString(),
     });
 
     if (success) {
       Logger.log('Successfully triggered translation for request: ' + requestId);
-
-      // Optionally send confirmation email
-      if (email) {
-        sendConfirmationEmail(email, requestId, targetLang);
-      }
+      Logger.log('User UID: ' + userUid);
     } else {
       Logger.log('Failed to trigger GitHub Actions');
     }
@@ -205,40 +235,6 @@ function triggerGitHubActions(payload) {
   }
 }
 
-/**
- * Send confirmation email to user
- */
-function sendConfirmationEmail(email, requestId, targetLang) {
-  const langNames = {
-    'en': 'English',
-    'ko': 'Korean (한국어)',
-    'ja': 'Japanese (日本語)',
-  };
-
-  const subject = `[Canvas Translator] Translation Request Received - ${requestId}`;
-  const body = `
-Hello,
-
-Your canvas translation request has been received and is being processed.
-
-Request ID: ${requestId}
-Target Language: ${langNames[targetLang] || targetLang}
-Estimated Time: 5-15 minutes
-
-You will receive another email with the translated file once processing is complete.
-
----
-Canvas Translator by RPLAY
-`;
-
-  try {
-    MailApp.sendEmail(email, subject, body);
-    Logger.log('Confirmation email sent to: ' + email);
-  } catch (error) {
-    Logger.log('Warning: Could not send confirmation email: ' + error.toString());
-  }
-}
-
 // ============================================================================
 // MANUAL TEST FUNCTIONS
 // ============================================================================
@@ -251,7 +247,7 @@ function testGitHubTrigger() {
     requestId: 'TR-TEST-' + Date.now(),
     fileId: 'TEST_FILE_ID',
     targetLang: 'en',
-    email: 'test@example.com',
+    userUid: '000000000000000000000000',  // Test UID
     timestamp: new Date().toISOString(),
   });
 

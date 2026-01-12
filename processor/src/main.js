@@ -1,12 +1,12 @@
 /**
  * Canvas Translator - Main Entry Point
  *
- * Downloads canvas from Google Drive, translates it, and sends via email.
+ * Downloads canvas from Google Drive, translates it, and imports to MongoDB.
  */
 
 import { downloadFromDrive } from './drive.js';
 import { translateCanvas } from './translate.js';
-import { sendEmail } from './email.js';
+import { importCanvasToMongoDB } from './mongodb-import.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -17,7 +17,7 @@ import path from 'path';
 const REQUEST_ID = process.env.REQUEST_ID || 'TR-LOCAL-' + Date.now();
 const FILE_ID = process.env.FILE_ID;
 const TARGET_LANG = process.env.TARGET_LANG || 'en';
-const USER_EMAIL = process.env.USER_EMAIL;
+const USER_UID = process.env.USER_UID;
 
 const LANG_NAMES = {
   en: 'English',
@@ -37,15 +37,18 @@ async function main() {
   console.log(`  Request ID:     ${REQUEST_ID}`);
   console.log(`  File ID:        ${FILE_ID}`);
   console.log(`  Target Lang:    ${TARGET_LANG} (${LANG_NAMES[TARGET_LANG]})`);
-  console.log(`  Email:          ${USER_EMAIL}`);
+  console.log(`  User UID:       ${USER_UID}`);
   console.log('');
 
   // Validate inputs
   if (!FILE_ID) {
     throw new Error('FILE_ID is required');
   }
-  if (!USER_EMAIL) {
-    throw new Error('USER_EMAIL is required');
+  if (!USER_UID) {
+    throw new Error('USER_UID is required');
+  }
+  if (!/^[a-f0-9]{24}$/i.test(USER_UID)) {
+    throw new Error('Invalid USER_UID format (must be 24-character hex)');
   }
   if (!['en', 'ko', 'ja'].includes(TARGET_LANG)) {
     throw new Error(`Invalid target language: ${TARGET_LANG}`);
@@ -78,42 +81,26 @@ async function main() {
     await translateCanvas(inputPath, outputPath, TARGET_LANG);
     console.log(`  Translated: ${outputPath}`);
 
-    // Step 3: Send email
+    // Step 3: Import to MongoDB
     console.log('');
-    console.log('Step 3: Sending result via email...');
-    await sendEmail({
-      to: USER_EMAIL,
-      requestId: REQUEST_ID,
-      sourceLang,
-      targetLang: TARGET_LANG,
-      attachmentPath: outputPath,
-    });
-    console.log(`  Email sent to: ${USER_EMAIL}`);
+    console.log('Step 3: Importing to user account...');
+    const translatedCanvas = JSON.parse(fs.readFileSync(outputPath, 'utf-8'));
+    const result = await importCanvasToMongoDB(translatedCanvas, USER_UID);
+    console.log(`  Canvas ID: ${result.canvasId}`);
+    console.log(`  Nodes: ${result.nodeCount}`);
 
     console.log('');
     console.log('═══════════════════════════════════════════════════════════════');
     console.log('  TRANSLATION COMPLETE');
     console.log('═══════════════════════════════════════════════════════════════');
+    console.log('');
+    console.log(`  The translated canvas has been imported to the user's account.`);
+    console.log(`  Canvas ID: ${result.canvasId}`);
+    console.log('');
 
   } catch (error) {
     console.error('');
     console.error('ERROR:', error.message);
-
-    // Send error notification email
-    if (USER_EMAIL) {
-      try {
-        await sendEmail({
-          to: USER_EMAIL,
-          requestId: REQUEST_ID,
-          sourceLang: 'unknown',
-          targetLang: TARGET_LANG,
-          error: error.message,
-        });
-      } catch (emailError) {
-        console.error('Failed to send error email:', emailError.message);
-      }
-    }
-
     throw error;
   } finally {
     // Cleanup work directory

@@ -1,30 +1,30 @@
 # Canvas Translator Web
 
-Automated StoryChat canvas translation system using Google Forms + GitHub Actions.
+Automated StoryChat canvas translation system using Google Forms + GitHub Actions + MongoDB import.
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                      Google Form                                 │
-│  User uploads: JSON file + Target language + Email              │
+│  User uploads: JSON file + Target language + User UID           │
 └─────────────────────────────┬───────────────────────────────────┘
                               │ On Submit
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                   Google Apps Script                             │
-│  - Saves file to Google Drive                                   │
-│  - Triggers GitHub Actions via repository_dispatch              │
+│  - Validates User UID format                                    │
+│  - Makes file accessible                                        │
+│  - Triggers GitHub Actions                                      │
 └─────────────────────────────┬───────────────────────────────────┘
-                              │ Webhook
+                              │ repository_dispatch
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                   GitHub Actions                                 │
 │  1. Downloads file from Google Drive                            │
-│  2. Extracts translatable content                               │
-│  3. Translates using Claude API                                 │
-│  4. Merges translations back                                    │
-│  5. Sends result via email (Mailgun)                            │
+│  2. Translates using Claude API                                 │
+│  3. Imports directly to user's MongoDB account                  │
+│     → Canvas appears in user's StoryChat!                       │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -32,36 +32,57 @@ Automated StoryChat canvas translation system using Google Forms + GitHub Action
 
 ### 1. Create Google Form
 
-Create a Google Form with:
-- **File upload** field (accepts .json)
-- **Target Language** dropdown (English, Korean, Japanese)
-- **Email** short answer field
+Create a Google Form with these fields:
+- **Canvas JSON File** - File upload (accepts .json)
+- **Target Language** - Dropdown (English, Korean, Japanese)
+- **User UID** - Short answer (24-character hex MongoDB ObjectId)
 
 ### 2. Set up Google Apps Script
 
-1. Open the linked Google Sheet
-2. Extensions > Apps Script
+1. Open the form's linked Google Sheet (Responses tab → Sheets icon)
+2. Go to **Extensions > Apps Script**
 3. Copy the code from `apps-script/Code.gs`
-4. Add your GitHub token and repo info
-5. Set up trigger: On Form Submit
+4. Update CONFIG with your GitHub token
+5. Click the clock icon → **Add Trigger** → `onFormSubmit` on form submit
 
-### 3. Configure GitHub Repository
+### 3. Configure GitHub Repository Secrets
 
-Add these secrets in Settings > Secrets:
-- `GOOGLE_SERVICE_ACCOUNT_JSON` - Service account credentials (entire JSON)
-- `ANTHROPIC_API_KEY` - Claude API key
-- `MAILGUN_API_KEY` - Mailgun API key
-- `MAILGUN_DOMAIN` - Mailgun domain (e.g., rplay.live)
+Go to https://github.com/YOUR-USERNAME/canvas-translator-web-test/settings/secrets/actions
 
-### 4. Share Google Drive Folder
+Add these secrets:
 
-Share the Drive folder containing uploaded files with the service account email.
+| Secret Name | Description |
+|-------------|-------------|
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | Entire JSON from Google service account |
+| `ANTHROPIC_API_KEY` | Your Claude API key (`sk-ant-...`) |
+| `MONGO_URI_3` | MongoDB connection string |
+
+### 4. Create Google Service Account
+
+1. Go to https://console.cloud.google.com/
+2. Create a project (or use existing)
+3. Enable Google Drive API
+4. Create a service account
+5. Download the JSON key
+6. Add the entire JSON as `GOOGLE_SERVICE_ACCOUNT_JSON` secret
+
+### 5. Share Drive Folder
+
+The uploaded files go to a Google Drive folder. Share it with the service account email (found in the JSON key).
 
 ## Supported Languages
 
 - English (en)
 - Korean (ko)
 - Japanese (ja)
+
+## How It Works
+
+1. User exports canvas from StoryChat as JSON
+2. User submits form with JSON file, target language, and their User UID
+3. System automatically translates all text content
+4. Translated canvas is imported directly to user's account
+5. User sees the new canvas in their StoryChat dashboard
 
 ## Cost
 
@@ -72,4 +93,22 @@ Share the Drive folder containing uploaded files with the service account email.
 | Google Apps Script | Free |
 | GitHub Actions | Free (2000 min/month) |
 | Claude API | ~$0.01-0.05 per canvas |
-| Mailgun | Free (5000 emails/month) |
+| MongoDB | Existing infrastructure |
+
+## Files
+
+```
+canvas-translator-web-test/
+├── apps-script/
+│   └── Code.gs              # Google Apps Script
+├── processor/
+│   ├── src/
+│   │   ├── main.js          # Entry point
+│   │   ├── drive.js         # Google Drive download
+│   │   ├── translate.js     # Claude API translation
+│   │   └── mongodb-import.js # MongoDB import
+│   └── package.json
+├── .github/workflows/
+│   └── canvas-translator.yml
+└── README.md
+```
