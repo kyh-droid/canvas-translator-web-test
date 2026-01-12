@@ -7,7 +7,7 @@ Automated StoryChat canvas translation system using Google Forms + GitHub Action
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                      Google Form                                 │
-│  User uploads: JSON file + Target language + User UID           │
+│  User uploads: JSON file + User UID                             │
 └─────────────────────────────┬───────────────────────────────────┘
                               │ On Submit
                               ▼
@@ -22,7 +22,7 @@ Automated StoryChat canvas translation system using Google Forms + GitHub Action
 ┌─────────────────────────────────────────────────────────────────┐
 │                   GitHub Actions                                 │
 │  1. Downloads file from Google Drive                            │
-│  2. Translates using Claude API                                 │
+│  2. Translates to English using Claude API                      │
 │  3. Imports directly to user's MongoDB account                  │
 │     → Canvas appears in user's StoryChat!                       │
 └─────────────────────────────────────────────────────────────────┘
@@ -34,8 +34,9 @@ Automated StoryChat canvas translation system using Google Forms + GitHub Action
 
 Create a Google Form with these fields:
 - **Canvas JSON File** - File upload (accepts .json)
-- **Target Language** - Dropdown (English, Korean, Japanese)
 - **User UID** - Short answer (24-character hex MongoDB ObjectId)
+
+Note: Target language is fixed to English.
 
 ### 2. Set up Google Apps Script
 
@@ -70,17 +71,15 @@ Add these secrets:
 
 The uploaded files go to a Google Drive folder. Share it with the service account email (found in the JSON key).
 
-## Supported Languages
+## Target Language
 
-- English (en)
-- Korean (ko)
-- Japanese (ja)
+All canvases are translated to **English**.
 
 ## How It Works
 
 1. User exports canvas from StoryChat as JSON
-2. User submits form with JSON file, target language, and their User UID
-3. System automatically translates all text content
+2. User submits form with JSON file and their User UID
+3. System automatically translates all text content to English
 4. Translated canvas is imported directly to user's account
 5. User sees the new canvas in their StoryChat dashboard
 

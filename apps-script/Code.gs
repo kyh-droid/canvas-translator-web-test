@@ -26,18 +26,11 @@ const CONFIG = {
   // Google Form field names (update if different)
   FORM_FIELDS: {
     FILE: 'Canvas JSON File',      // File upload field title
-    TARGET_LANG: 'Target Language', // Dropdown field title
     USER_UID: 'User UID',          // User's MongoDB ObjectId (24-char hex)
   },
 
-  // Language mapping (Form answer -> code)
-  LANGUAGE_MAP: {
-    'English': 'en',
-    'Korean': 'ko',
-    '한국어': 'ko',
-    'Japanese': 'ja',
-    '日本語': 'ja',
-  },
+  // Target language is fixed to English
+  TARGET_LANG: 'en',
 };
 
 // ============================================================================
@@ -108,7 +101,6 @@ function onFormSubmit(e) {
 
     // Extract form data
     const fileUrls = responses[CONFIG.FORM_FIELDS.FILE];
-    const targetLangRaw = responses[CONFIG.FORM_FIELDS.TARGET_LANG]?.[0] || '';
     const userUid = responses[CONFIG.FORM_FIELDS.USER_UID]?.[0] || '';
 
     // Get the file URL (Google Drive URL from form upload)
@@ -132,8 +124,8 @@ function onFormSubmit(e) {
       return;
     }
 
-    // Map language to code
-    const targetLang = CONFIG.LANGUAGE_MAP[targetLangRaw] || 'en';
+    // Target language is fixed to English
+    const targetLang = CONFIG.TARGET_LANG;
 
     // Generate request ID
     const requestId = 'TR-' + Date.now() + '-' + Math.random().toString(36).substring(2, 8);
